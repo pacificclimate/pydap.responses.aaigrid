@@ -1,7 +1,7 @@
 import os
 import logging
 from tempfile import NamedTemporaryFile, SpooledTemporaryFile
-from itertools import imap, izip, chain
+from itertools import imap, izip, chain, izip_longest
 from zipfile import ZipFile, ZIP_DEFLATED
 
 import gdal
@@ -37,6 +37,11 @@ def ziperator(responders):
         
 class AAIGridResponse(BaseResponse):
     def __init__(self, dataset):
+
+        if type(dataset) != GridType:
+            # FIXME: HTTP 400 BadRequest
+            pass
+
         BaseResponse.__init__(self, dataset)
 
         self.headers.extend([
@@ -48,25 +53,22 @@ class AAIGridResponse(BaseResponse):
         
     def __iter__(self):
 
-        # Check that we have x and y maps
+        # FIXME: Check that we have x and y maps
 
-        # time_var = 't'
-        # for i in range(self.dataset.maps['t'].shape):
-        #     layer = self.dataset[:,:,i]
+        time_var = 't' # FIXME: Is this true?
+        dsts = [ self.dataset[:,:,i] for i in range(self.dataset.maps[time_var].shape[0]) ]
 
-        dsts = [ self.dataset[:,:,i] for i in range(self.dataset.maps['t'].shape[0]) ]
+        file_generator = _bands_to_gdal_files(dsts)
 
-        file_lists = imap(_band_to_gdal_files, dsts)
-        file_list = chain(*file_lists)
-        file_list = [x for x in file_list]
+        def named_file_iterator(filename):
+            def content():
+                with open(filename, 'r') as my_file:
+                    for chunk in my_file:
+                        yield chunk
+                os.unlink(filename)
+            return filename, content()
 
-        def responder(filename):
-            with open(filename, 'r') as my_file:
-                for chunk in my_file:
-                    yield chunk
-            os.unlink(filename)
-
-        all_responders = izip(file_list, imap(responder, file_list))
+        all_responders = imap(named_file_iterator, file_generator)
         return ziperator(all_responders)
 
 
@@ -107,5 +109,11 @@ def _band_to_gdal_files(dap_grid, filename=None):
 
     dst_ds = None
     src_ds = None
-    
-    return file_list
+
+    for filename in file_list:
+        yield filename
+
+def _bands_to_gdal_files(dap_grid_iterable, filename_iterable=[]):
+    for dap_grid, filename in izip_longest(dap_grid_iterable, filename_iterable, fillvalue=None):
+        for filename_to_yield in _band_to_gdal_files(dap_grid, filename):
+            yield filename_to_yield
