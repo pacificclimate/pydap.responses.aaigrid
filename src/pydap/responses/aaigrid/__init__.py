@@ -8,6 +8,7 @@ import gdal
 import osr
 import numpy
 import pytest
+from webob.exc import HTTPBadRequest
 
 from pydap.responses.lib import BaseResponse
 from pydap.model import *
@@ -39,8 +40,19 @@ class AAIGridResponse(BaseResponse):
     def __init__(self, dataset):
 
         if type(dataset) != GridType:
-            # FIXME: HTTP 400 BadRequest
-            pass
+            raise HTTPBadRequest("The ArcASCII Grid (aaigrid) response only supports GridTypes, not the requested {}".format(type(dataset)))
+
+        if len(dataset.maps) not in (2, 3):
+            raise HTTPBadRequest("The ArcASCII Grid (aaigrid) response only supports Grids with 2 or 3 dimensions, not the requested {}".format(len(dataset.maps)))
+
+        try:
+            self._geo_transform = detect_dataset_transform(dataset)
+        except Exception, e:
+            raise HTTPBadRequest("The ArcASCII Grid (aaigrid) response could not detect the grid transform: {}".format(e.message))
+
+        # FIXME: Verify this
+        self.srs = osr.SpatialReference()
+        self.srs.SetWellKnownGeogCS('WGS84')
 
         BaseResponse.__init__(self, dataset)
 
@@ -50,15 +62,22 @@ class AAIGridResponse(BaseResponse):
         ])
         # Optionally set the filesize header if possible
         #self.headers.extend([('Content-length', self.nc.filesize)])
+
+    @property
+    def geo_transform(self):
+        if not hasattr(self, '_geo_transform'):
+            self._geo_transform = detect_dataset_transform(self.dataset)
+        return self._geo_transform
         
     def __iter__(self):
 
-        # FIXME: Check that we have x and y maps
+        if len(self.dataset.maps) > 2:
+            time_var = 'T' # FIXME: Is this true?
+            dsts = [ self.dataset[:,:,i] for i in range(get_map(self.dataset, time_var).shape[0]) ]
+        else:
+            dsts = [ self.dataset ]
 
-        time_var = 't' # FIXME: Is this true?
-        dsts = [ self.dataset[:,:,i] for i in range(self.dataset.maps[time_var].shape[0]) ]
-
-        file_generator = _bands_to_gdal_files(dsts)
+        file_generator = _bands_to_gdal_files(dsts, self.geo_transform, self.srs)
 
         def named_file_iterator(filename):
             def content():
@@ -72,7 +91,10 @@ class AAIGridResponse(BaseResponse):
         return ziperator(all_responders)
 
 
-def _band_to_gdal_files(dap_grid, filename=None):
+# FIXME: This is essentially side-effect based
+# It writes a file to disk and then returns the filenames
+# Should we just bake the file generator into this method?
+def _band_to_gdal_files(dap_grid, geo_transform, srs, filename=None):
 
     # FIXME: Arc Grid only supports 2 dimensions and a single band
     # ensure that this is only two dimensions
@@ -88,9 +110,7 @@ def _band_to_gdal_files(dap_grid, filename=None):
     
     with NamedTemporaryFile() as f:
         dst_ds = driver.Create(f.name, xlen, ylen, 1, gdal.GDT_Byte)
-        dst_ds.SetGeoTransform( [ 444720, 30, 0, 3751320, 0, -30 ] ) # FIXME: get from geographic coordinates
-        srs = osr.SpatialReference()
-        srs.SetWellKnownGeogCS('WGS84')
+        dst_ds.SetGeoTransform( geo_transform )
         dst_ds.SetProjection( srs.ExportToWkt() )
 
         data = dap_grid.array.data
@@ -113,7 +133,33 @@ def _band_to_gdal_files(dap_grid, filename=None):
     for filename in file_list:
         yield filename
 
-def _bands_to_gdal_files(dap_grid_iterable, filename_iterable=[]):
+def _bands_to_gdal_files(dap_grid_iterable, geo_transform, srs, filename_iterable=[]):
     for dap_grid, filename in izip_longest(dap_grid_iterable, filename_iterable, fillvalue=None):
-        for filename_to_yield in _band_to_gdal_files(dap_grid, filename):
+        for filename_to_yield in _band_to_gdal_files(dap_grid, geo_transform, srs, filename):
             yield filename_to_yield
+
+def get_map(dst, axis):
+    for map_name, map_ in dst.maps.iteritems():
+        if map_.attributes.has_key('axis'):
+            if map_.attributes['axis'] == axis:
+                return map_
+    return None
+
+def detect_dataset_transform(dst):
+    # Iterate through maps, searching for axis attributes
+    xmap, ymap = get_map(dst, 'X'), get_map(dst, 'Y')
+
+    if not (xmap and ymap):
+        raise Exception("Dataset does not have a map for both the X and Y axes")
+
+    xd = numpy.diff(xmap.data)
+    pix_width = xd[0]
+    assert (pix_width == xd).all() # No support for irregular grids
+
+    yd = numpy.diff(ymap.data)
+    pix_height = yd[0]
+    assert (pix_height == yd).all() # No support for irregular grids
+
+    ulx = xmap.data.min() - pix_width
+    uly = ymap.data.max() + pix_height # north up
+    return [ ulx, pix_width, 0, uly, 0, pix_height ]
