@@ -3,6 +3,7 @@ import logging
 from tempfile import NamedTemporaryFile, SpooledTemporaryFile
 from itertools import imap, izip, chain, izip_longest
 from zipfile import ZipFile, ZIP_DEFLATED
+import re
 
 import gdal
 import osr
@@ -13,6 +14,10 @@ from webob.exc import HTTPBadRequest
 from pydap.responses.lib import BaseResponse
 from pydap.model import *
 from pydap.lib import walk, get_var
+
+import logging
+logging.basicConfig(level=logging.DEBUG)
+logger = logging.getLogger()
 
 # FIXME: this code should be factored out... it's used in two places!
 def ziperator(responders):
@@ -39,16 +44,25 @@ def ziperator(responders):
 class AAIGridResponse(BaseResponse):
     def __init__(self, dataset):
 
-        if type(dataset) != GridType:
-            raise HTTPBadRequest("The ArcASCII Grid (aaigrid) response only supports GridTypes, not the requested {}".format(type(dataset)))
+        if not dataset:
+            raise HTTPBadRequest("The ArcASCII Grid (aaigrid) response did not receive required dataset parameter")
 
-        if len(dataset.maps) not in (2, 3):
-            raise HTTPBadRequest("The ArcASCII Grid (aaigrid) response only supports Grids with 2 or 3 dimensions, not the requested {}".format(len(dataset.maps)))
+        # FIXME: In reality we will always get a _Dataset_ Type and should use pydap.lib.walk to walk through all of the Grids
+        self.grids = [x for x in walk(dataset, GridType)]
+        if not self.grids:
+        #if type(dataset) != GridType:
+            raise HTTPBadRequest("The ArcASCII Grid (aaigrid) response only supports GridTypes, yet none are included in the requested dataset: {}".format(dataset))
 
-        try:
-            self._geo_transform = detect_dataset_transform(dataset)
-        except Exception, e:
-            raise HTTPBadRequest("The ArcASCII Grid (aaigrid) response could not detect the grid transform: {}".format(e.message))
+        for grid in self.grids:
+            l = len(grid.maps)
+            if l not in (2, 3):
+                raise HTTPBadRequest("The ArcASCII Grid (aaigrid) response only supports Grids with 2 or 3 dimensions, but one of the requested grids contains {} dimension{}".format(l, 's' if l > 1 else ''))
+            try:
+                import pytest
+                detect_dataset_transform(grid)
+            except Exception, e:
+                pytest.set_trace()
+                raise HTTPBadRequest("The ArcASCII Grid (aaigrid) response could not detect the grid transform for grid {}: {}".format(grid.name, e.message))
 
         # FIXME: Verify this
         self.srs = osr.SpatialReference()
@@ -65,19 +79,38 @@ class AAIGridResponse(BaseResponse):
 
     @property
     def geo_transform(self):
+        # try:
+        #     self._geo_transform = detect_dataset_transform(dataset)
+        # except Exception, e:
+        #     raise HTTPBadRequest("The ArcASCII Grid (aaigrid) response could not detect the grid transform: {}".format(e.message))
+
         if not hasattr(self, '_geo_transform'):
             self._geo_transform = detect_dataset_transform(self.dataset)
         return self._geo_transform
         
     def __iter__(self):
 
-        if len(self.dataset.maps) > 2:
-            time_var = 'T' # FIXME: Is this true?
-            dsts = [ self.dataset[:,:,i] for i in range(get_map(self.dataset, time_var).shape[0]) ]
-        else:
-            dsts = [ self.dataset ]
+        grids = [ grid for grid in walk(self.dataset, GridType) ]
+        #logger.debug(grid[:])
 
-        file_generator = _bands_to_gdal_files(dsts, self.geo_transform, self.srs)
+        def generate_grid_layers(grid):
+            if len(grid.maps) > 2:
+                for i in range(get_time_map(grid).shape[0]):
+                    logger.debug("generate_grid_layers: yielding grid[:,:,{i}:{i}+1]".format(i=i))
+                    subgrid = grid[:,:,i] # or grid[:,:,i:i+1]
+                    logger.debug(subgrid)
+                    #pytest.set_trace()
+                    yield subgrid
+            else:
+                logger.debug("generate_grid_layers: grid '{}' has 2 or less maps, so I'm just yielding the whole thing")
+                yield grid
+
+        logger.debug("__iter__: creating the grid layers iterable")
+        grid_layers = chain.from_iterable( [ generate_grid_layers(grid) for grid in grids ] )
+        #grid_layers = chain( [ generate_grid_layers(grid) for grid in grids ] )
+
+        logger.debug("__iter__: creating the file generator")
+        file_generator = _bands_to_gdal_files(grid_layers, self.srs)
 
         def named_file_iterator(filename):
             def content():
@@ -87,6 +120,7 @@ class AAIGridResponse(BaseResponse):
                 os.unlink(filename)
             return filename, content()
 
+        logger.debug("__iter__: creating the all_responders iterator")
         all_responders = imap(named_file_iterator, file_generator)
         return ziperator(all_responders)
 
@@ -94,8 +128,11 @@ class AAIGridResponse(BaseResponse):
 # FIXME: This is essentially side-effect based
 # It writes a file to disk and then returns the filenames
 # Should we just bake the file generator into this method?
-def _band_to_gdal_files(dap_grid, geo_transform, srs, filename=None):
+def _band_to_gdal_files(dap_grid, srs, filename=None):
 
+    logger.debug("_band_to_gdal_files: translating this grid {} of this srs {} to this file {}".format(dap_grid, srs, filename))
+
+    geo_transform = detect_dataset_transform(dap_grid)
     # FIXME: Arc Grid only supports 2 dimensions and a single band
     # ensure that this is only two dimensions
 
@@ -106,7 +143,21 @@ def _band_to_gdal_files(dap_grid, geo_transform, srs, filename=None):
     assert metadata.has_key(gdal.DCAP_CREATE)
     assert metadata[gdal.DCAP_CREATE] == 'YES'
 
-    ylen, xlen = dap_grid.array.shape # FIXME: why are these backwards?
+    logger.debug("Investigating the shape of this grid: {}".format(dap_grid.array))
+
+    # FIXME: This is broken... we should never get a 3d dataset... wtf?
+    shp = dap_grid.array.shape
+    if len(shp) == 2:
+        ylen, xlen =  shp
+        data = dap_grid.array.data
+    elif len(shp) == 3:
+        ylen, xlen, _ = shp
+        #pytest.set_trace()
+        data = iter(dap_grid.array.data).next()
+    else:
+        raise ValueError("_band_to_gdal_files received a grid of rank {} rather than the required 2 (or 3?)".format(len(shp)))
+
+    logger.debug("_band_to_gdal_files: shape checking complete... proceeding with this grid: {}".format(data))
     
     with NamedTemporaryFile() as f:
         dst_ds = driver.Create(f.name, xlen, ylen, 1, gdal.GDT_Byte)
@@ -114,7 +165,7 @@ def _band_to_gdal_files(dap_grid, geo_transform, srs, filename=None):
         dst_ds.SetProjection( srs.ExportToWkt() )
 
         data = dap_grid.array.data
-        dst_ds.GetRasterBand(1).WriteArray( dap_grid.array.data )
+        dst_ds.GetRasterBand(1).WriteArray( data )
         
         src_ds = dst_ds
        
@@ -133,9 +184,9 @@ def _band_to_gdal_files(dap_grid, geo_transform, srs, filename=None):
     for filename in file_list:
         yield filename
 
-def _bands_to_gdal_files(dap_grid_iterable, geo_transform, srs, filename_iterable=[]):
-    for dap_grid, filename in izip_longest(dap_grid_iterable, filename_iterable, fillvalue=None):
-        for filename_to_yield in _band_to_gdal_files(dap_grid, geo_transform, srs, filename):
+def _bands_to_gdal_files(dap_grid_iterable, srs, filename_iterable=[]):
+    for dap_grid, filename in izip_longest(dap_grid_iterable, filename_iterable):
+        for filename_to_yield in _band_to_gdal_files(dap_grid, srs, filename):
             yield filename_to_yield
 
 def get_map(dst, axis):
@@ -145,21 +196,43 @@ def get_map(dst, axis):
                 return map_
     return None
 
+def get_time_map(dst):
+    # according to http://cf-pcmdi.llnl.gov/documents/cf-conventions/1.6/cf-conventions.html#time-coordinate
+    # the time coordinate is identifiable by its units alone
+    # though optionally it can be indicated by using the standard_name and/or axis='T'
+    # We'll search for those in reverse order
+    for map_name, map_ in dst.maps.iteritems():
+        attrs = map_.attributes
+#        if attrs.has_key('axis') and attrs['axis'] == 'T':
+#            return map_
+#        if attrs.has_key('standard_name') and attrs['standard_name'] == 'time':
+#            return map_
+        if attrs.has_key('units') and re.match('(day|d|hour|h|hr|minute|min|second|sec|s)s? since .+', attrs['units']):
+            return map_
+    return None
+
 def detect_dataset_transform(dst):
+    # dst must be a Grid
+    if type(dst) != GridType:
+        raise Exception("Dataset must be of type Grid, not {}".format(type(dst)))
+
     # Iterate through maps, searching for axis attributes
     xmap, ymap = get_map(dst, 'X'), get_map(dst, 'Y')
 
-    if not (xmap and ymap):
+    if xmap is None or ymap is None:
         raise Exception("Dataset does not have a map for both the X and Y axes")
 
-    xd = numpy.diff(xmap.data)
+    #pytest.set_trace()
+    xarray = numpy.array([x for x in xmap.data]) # Have to iterate over HDF5Data objects to actually get the data
+    xd = numpy.diff(xarray)
     pix_width = xd[0]
-    assert (pix_width == xd).all() # No support for irregular grids
+    assert numpy.isclose(pix_width, xd).all(), "No support for irregular grids"
 
-    yd = numpy.diff(ymap.data)
+    yarray = numpy.array([y for y in ymap.data])
+    yd = numpy.diff(yarray)
     pix_height = yd[0]
-    assert (pix_height == yd).all() # No support for irregular grids
+    assert numpy.isclose(pix_height, yd).all(), "No support for irregular grids"
 
-    ulx = xmap.data.min() - pix_width
-    uly = ymap.data.max() + pix_height # north up
+    ulx = numpy.min(xarray) - pix_width
+    uly = numpy.max(yarray) + pix_height # north up
     return [ ulx, pix_width, 0, uly, 0, pix_height ]

@@ -11,19 +11,20 @@ def test_bad_dataset_failure():
     with pytest.raises(HTTPBadRequest) as excinfo:
         app = AAIGridResponse(None)
 
-    assert "only supports GridType" in excinfo.value.message
+    assert "did not receive required dataset parameter" in excinfo.value.message
 
 def test_single_dimension_failure(single_dimension_dataset):
     with pytest.raises(HTTPBadRequest) as excinfo:
         app = AAIGridResponse(single_dimension_dataset)
 
-    assert "supports Grids with 2 or 3 dimensions, not the requested 1" in excinfo.value.message
+    assert excinfo.value.message.endswith("supports Grids with 2 or 3 dimensions, but one of the requested grids contains 1 dimension")
 
 def test_four_dimension_failure(four_dimension_dataset):
     with pytest.raises(HTTPBadRequest) as excinfo:
         app = AAIGridResponse(four_dimension_dataset)
 
-    assert "supports Grids with 2 or 3 dimensions, not the requested 4" in excinfo.value.message
+    assert excinfo.value.message.endswith("supports Grids with 2 or 3 dimensions, but one of the requested grids contains 4 dimensions")
+
 
 def notest_can_call(app, temp_file):
     req = Request.blank('/')
@@ -96,3 +97,9 @@ NODATA_value      0
  0 4 8
  12 16 20
 '''
+
+def test_real_data(real_data_test):
+    req = Request.blank('/pr+tasmax+tasmin_day_BCCA+ANUSPLIN300+ACCESS1-0_historical+rcp45_r1i1p1_19500101-21001231.h5.aig?tasmax&')
+    resp = req.get_response(real_data_test)
+    assert resp.status == '200 OK'
+    print resp.body
