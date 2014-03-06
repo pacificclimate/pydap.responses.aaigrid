@@ -47,10 +47,9 @@ class AAIGridResponse(BaseResponse):
         if not dataset:
             raise HTTPBadRequest("The ArcASCII Grid (aaigrid) response did not receive required dataset parameter")
 
-        # FIXME: In reality we will always get a _Dataset_ Type and should use pydap.lib.walk to walk through all of the Grids
+        # We will (should?) always get a _DatasetType_ and should use pydap.lib.walk to walk through all of the Grids
         self.grids = [x for x in walk(dataset, GridType)]
         if not self.grids:
-        #if type(dataset) != GridType:
             raise HTTPBadRequest("The ArcASCII Grid (aaigrid) response only supports GridTypes, yet none are included in the requested dataset: {}".format(dataset))
 
         for grid in self.grids:
@@ -74,32 +73,18 @@ class AAIGridResponse(BaseResponse):
             ('Content-type','application/zip'),
             ('Content-Disposition', 'filename="arc_ascii_grid.zip"')
         ])
-        # Optionally set the filesize header if possible
-        #self.headers.extend([('Content-length', self.nc.filesize)])
-
-    @property
-    def geo_transform(self):
-        # try:
-        #     self._geo_transform = detect_dataset_transform(dataset)
-        # except Exception, e:
-        #     raise HTTPBadRequest("The ArcASCII Grid (aaigrid) response could not detect the grid transform: {}".format(e.message))
-
-        if not hasattr(self, '_geo_transform'):
-            self._geo_transform = detect_dataset_transform(self.dataset)
-        return self._geo_transform
         
     def __iter__(self):
 
         grids = [ grid for grid in walk(self.dataset, GridType) ]
-        #logger.debug(grid[:])
 
+        # FIXME: There's may still be some problems with implicit dimension ordering
         def generate_grid_layers(grid):
             if len(grid.maps) > 2:
                 for i in range(get_time_map(grid).shape[0]):
-                    logger.debug("generate_grid_layers: yielding grid[:,:,{i}:{i}+1]".format(i=i))
-                    subgrid = grid[:,:,i] # or grid[:,:,i:i+1]
+                    logger.debug("generate_grid_layers: yielding grid[{i}:{i}+1,:,:]".format(i=i))
+                    subgrid = grid[i,:,:]
                     logger.debug(subgrid)
-                    #pytest.set_trace()
                     yield subgrid
             else:
                 logger.debug("generate_grid_layers: grid '{}' has 2 or less maps, so I'm just yielding the whole thing")
@@ -107,7 +92,6 @@ class AAIGridResponse(BaseResponse):
 
         logger.debug("__iter__: creating the grid layers iterable")
         grid_layers = chain.from_iterable( [ generate_grid_layers(grid) for grid in grids ] )
-        #grid_layers = chain( [ generate_grid_layers(grid) for grid in grids ] )
 
         logger.debug("__iter__: creating the file generator")
         file_generator = _bands_to_gdal_files(grid_layers, self.srs)
@@ -145,14 +129,12 @@ def _band_to_gdal_files(dap_grid, srs, filename=None):
 
     logger.debug("Investigating the shape of this grid: {}".format(dap_grid.array))
 
-    # FIXME: This is broken... we should never get a 3d dataset... wtf?
     shp = dap_grid.array.shape
     if len(shp) == 2:
         ylen, xlen =  shp
         data = dap_grid.array.data
     elif len(shp) == 3:
         ylen, xlen, _ = shp
-        #pytest.set_trace()
         data = iter(dap_grid.array.data).next()
     else:
         raise ValueError("_band_to_gdal_files received a grid of rank {} rather than the required 2 (or 3?)".format(len(shp)))
@@ -203,10 +185,10 @@ def get_time_map(dst):
     # We'll search for those in reverse order
     for map_name, map_ in dst.maps.iteritems():
         attrs = map_.attributes
-#        if attrs.has_key('axis') and attrs['axis'] == 'T':
-#            return map_
-#        if attrs.has_key('standard_name') and attrs['standard_name'] == 'time':
-#            return map_
+        if attrs.has_key('axis') and attrs['axis'] == 'T':
+            return map_
+        if attrs.has_key('standard_name') and attrs['standard_name'] == 'time':
+            return map_
         if attrs.has_key('units') and re.match('(day|d|hour|h|hr|minute|min|second|sec|s)s? since .+', attrs['units']):
             return map_
     return None
@@ -222,7 +204,6 @@ def detect_dataset_transform(dst):
     if xmap is None or ymap is None:
         raise Exception("Dataset does not have a map for both the X and Y axes")
 
-    #pytest.set_trace()
     xarray = numpy.array([x for x in xmap.data]) # Have to iterate over HDF5Data objects to actually get the data
     xd = numpy.diff(xarray)
     pix_width = xd[0]

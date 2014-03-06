@@ -94,8 +94,8 @@ yllcorner    53.000000000000
 dx           -0.500000000000
 dy           1.000000000000
 NODATA_value      0
- 0 4 8
- 12 16 20
+ 0 1 2
+ 3 4 5
 '''
 
 def test_real_data(real_data_test):
