@@ -60,7 +60,7 @@ xllcorner    -122.500000000000
 yllcorner    53.000000000000
 dx           -0.500000000000
 dy           1.000000000000
-NODATA_value      0
+NODATA_value  -9999
  0 1 2
  3 4 5
 '''
@@ -93,7 +93,7 @@ xllcorner    -122.500000000000
 yllcorner    53.000000000000
 dx           -0.500000000000
 dy           1.000000000000
-NODATA_value      0
+NODATA_value  -9999
  0 1 2
  3 4 5
 '''
@@ -103,3 +103,4 @@ def test_real_data(real_data_test):
     resp = req.get_response(real_data_test)
     assert resp.status == '200 OK'
     print resp.body
+

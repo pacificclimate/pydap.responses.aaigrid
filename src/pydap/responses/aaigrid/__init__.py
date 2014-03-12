@@ -8,6 +8,7 @@ import re
 import gdal
 import osr
 import numpy
+from numpy import ma
 import pytest
 from webob.exc import HTTPBadRequest
 
@@ -40,6 +41,12 @@ def ziperator(responders):
         f.seek(pos)
         yield f.read()
 
+numpy_to_gdal = {'float32': gdal.GDT_Float32,
+                 'float64': gdal.GDT_Float64,
+                 'int64': gdal.GDT_Int32,
+                 'int16': gdal.GDT_Int16,
+                 'int8': gdal.GDT_Byte}
+
         
 class AAIGridResponse(BaseResponse):
     def __init__(self, dataset):
@@ -60,7 +67,6 @@ class AAIGridResponse(BaseResponse):
                 import pytest
                 detect_dataset_transform(grid)
             except Exception, e:
-                pytest.set_trace()
                 raise HTTPBadRequest("The ArcASCII Grid (aaigrid) response could not detect the grid transform for grid {}: {}".format(grid.name, e.message))
 
         # FIXME: Verify this
@@ -117,6 +123,10 @@ def _band_to_gdal_files(dap_grid, srs, filename=None):
     logger.debug("_band_to_gdal_files: translating this grid {} of this srs {} to this file {}".format(dap_grid, srs, filename))
 
     geo_transform = detect_dataset_transform(dap_grid)
+    try:
+        missval = dap_grid.attributes['missing_value'][0]
+    except KeyError:
+        missval = None
     # FIXME: Arc Grid only supports 2 dimensions and a single band
     # ensure that this is only two dimensions
 
@@ -134,19 +144,30 @@ def _band_to_gdal_files(dap_grid, srs, filename=None):
         ylen, xlen =  shp
         data = dap_grid.array.data
     elif len(shp) == 3:
-        ylen, xlen, _ = shp
+        _, ylen, xlen = shp
         data = iter(dap_grid.array.data).next()
     else:
         raise ValueError("_band_to_gdal_files received a grid of rank {} rather than the required 2 (or 3?)".format(len(shp)))
 
-    logger.debug("_band_to_gdal_files: shape checking complete... proceeding with this grid: {}".format(data))
-    
+    logger.debug("_band_to_gdal_files: shape {} checking complete... proceeding with this grid: {}".format(shp, data))
+
+    if missval:
+        data = ma.masked_equal(data, missval)
+    target_type = numpy_to_gdal[data.dtype.name]
+
     with NamedTemporaryFile() as f:
-        dst_ds = driver.Create(f.name, xlen, ylen, 1, gdal.GDT_Byte)
+
+        logger.debug("Creating a GDAL driver ({}, {}) of type {}".format(xlen, ylen, target_type))
+        dst_ds = driver.Create(f.name, xlen, ylen, 1, target_type)
+
         dst_ds.SetGeoTransform( geo_transform )
         dst_ds.SetProjection( srs.ExportToWkt() )
 
-        data = dap_grid.array.data
+        if missval:
+            dst_ds.GetRasterBand(1).SetNoDataValue(missval.astype('float'))
+        else:
+            # To clear the nodata value, set with an "out of range" value per GDAL docs
+            dst_ds.GetRasterBand(1).SetNoDataValue(-9999)
         dst_ds.GetRasterBand(1).WriteArray( data )
         
         src_ds = dst_ds
@@ -193,6 +214,7 @@ def get_time_map(dst):
             return map_
     return None
 
+# FIXME: I'm upside down!!
 def detect_dataset_transform(dst):
     # dst must be a Grid
     if type(dst) != GridType:
@@ -204,12 +226,20 @@ def detect_dataset_transform(dst):
     if xmap is None or ymap is None:
         raise Exception("Dataset does not have a map for both the X and Y axes")
 
-    xarray = numpy.array([x for x in xmap.data]) # Have to iterate over HDF5Data objects to actually get the data
+    if type(xmap.data) == numpy.ndarray:
+        xarray = xmap.data
+    else:
+        xarray = iter(xmap.data).next() # Might to iterate over proxy objects to actually get the data
+
     xd = numpy.diff(xarray)
     pix_width = xd[0]
     assert numpy.isclose(pix_width, xd).all(), "No support for irregular grids"
 
-    yarray = numpy.array([y for y in ymap.data])
+    if type(ymap.data) == numpy.ndarray:
+        yarray = ymap.data
+    else:
+        yarray = iter(ymap.data).next()
+
     yd = numpy.diff(yarray)
     pix_height = yd[0]
     assert numpy.isclose(pix_height, yd).all(), "No support for irregular grids"
