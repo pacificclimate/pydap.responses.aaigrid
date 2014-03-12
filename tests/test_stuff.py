@@ -45,8 +45,8 @@ def test_single_layer_dataset(single_layer_app, temp_file):
     z = ZipFile(temp_file.name, 'r', ZIP_DEFLATED)
     assert z
 
-    # Should be 3 files .aux.xml .asc .prj
-    assert len(z.namelist()) == 3
+    # Should be 2 files .asc .prj
+    assert len(z.namelist()) == 2
 
     # find the first asc file
     asc_filename = filter(lambda x: x.endswith('.asc'), z.namelist())[0]
@@ -79,7 +79,7 @@ def test_multi_layer_dataset(multi_layer_app, temp_file):
     assert z
 
     # Should be 3 files for each layer
-    assert len(z.namelist()) == 3 * 4
+    assert len(z.namelist()) == 2 * 4
 
     # find the first asc file
     asc_filename = filter(lambda x: x.endswith('.asc'), z.namelist())[0]

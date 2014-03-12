@@ -23,7 +23,7 @@ def single_dimension_dataset():
 def single_layer_dataset():
     dst = DatasetType('my_dataset')
     grid = GridType('my_grid')
-    grid['my_var'] = BaseType('my_var', np.arange(6).reshape(2, 3), dimensions=('y', 'x'))
+    grid['my_var'] = BaseType('my_var', np.array([[3, 4, 5], [0, 1, 2]]), dimensions=('y', 'x'))
     grid['y'] = BaseType('y', np.arange(48.0, 51.0, 1.0), units='degrees_north', axis='Y')
     grid['x'] = BaseType('x', np.arange(-122.0, -123.5, -0.5), units='degrees_east', axis='X')
     dst['my_grid'] = grid
@@ -34,7 +34,7 @@ def single_layer_dataset():
 def multi_layer_dataset():
     dst = DatasetType('my_dataset')
     grid = GridType('my_grid')
-    grid['my_var'] = BaseType('my_var', np.arange(24).reshape(4, 2, 3), dimensions=('t', 'y', 'x'))
+    grid['my_var'] = BaseType('my_var', np.arange(24).reshape(4, 2, 3)[:,::-1,...], dimensions=('t', 'y', 'x'))
     grid['t'] = BaseType('t', np.arange(4), units='days since 1950-01-01', axis='T')
     grid['y'] = BaseType('y', np.arange(48.0, 51.0, 1.0), units='degrees_north', axis='Y')
     grid['x'] = BaseType('x', np.arange(-122.0, -123.5, -0.5), units='degrees_east', axis='X')

@@ -132,7 +132,7 @@ def _band_to_gdal_files(dap_grid, srs, filename=None):
 
     # GDAL's AAIGrid driver only works in CreateCopy mode,
     # so we have to create the dataset with something else first
-    driver = gdal.GetDriverByName('NetCDF')
+    driver = gdal.GetDriverByName('MEM')
     metadata = driver.GetMetadata()
     assert metadata.has_key(gdal.DCAP_CREATE)
     assert metadata[gdal.DCAP_CREATE] == 'YES'
@@ -155,7 +155,7 @@ def _band_to_gdal_files(dap_grid, srs, filename=None):
         data = ma.masked_equal(data, missval)
     target_type = numpy_to_gdal[data.dtype.name]
 
-    with NamedTemporaryFile() as f:
+    with NamedTemporaryFile(suffix='.tif') as f:
 
         logger.debug("Creating a GDAL driver ({}, {}) of type {}".format(xlen, ylen, target_type))
         dst_ds = driver.Create(f.name, xlen, ylen, 1, target_type)
@@ -168,7 +168,8 @@ def _band_to_gdal_files(dap_grid, srs, filename=None):
         else:
             # To clear the nodata value, set with an "out of range" value per GDAL docs
             dst_ds.GetRasterBand(1).SetNoDataValue(-9999)
-        dst_ds.GetRasterBand(1).WriteArray( data )
+        logger.debug("Data: {}".format(data))
+        dst_ds.GetRasterBand(1).WriteArray( numpy.flipud(data) )
         
         src_ds = dst_ds
        
@@ -214,7 +215,6 @@ def get_time_map(dst):
             return map_
     return None
 
-# FIXME: I'm upside down!!
 def detect_dataset_transform(dst):
     # dst must be a Grid
     if type(dst) != GridType:
