@@ -8,7 +8,6 @@ import re
 import gdal
 import osr
 import numpy
-import pytest
 from webob.exc import HTTPBadRequest
 
 from pydap.responses.lib import BaseResponse
@@ -58,10 +57,8 @@ class AAIGridResponse(BaseResponse):
             if l not in (2, 3):
                 raise HTTPBadRequest("The ArcASCII Grid (aaigrid) response only supports Grids with 2 or 3 dimensions, but one of the requested grids contains {} dimension{}".format(l, 's' if l > 1 else ''))
             try:
-                import pytest
                 detect_dataset_transform(grid)
             except Exception, e:
-                pytest.set_trace()
                 raise HTTPBadRequest("The ArcASCII Grid (aaigrid) response could not detect the grid transform for grid {}: {}".format(grid.name, e.message))
 
         # FIXME: Verify this
@@ -99,7 +96,6 @@ class AAIGridResponse(BaseResponse):
                     logger.debug("generate_grid_layers: yielding grid[:,:,{i}:{i}+1]".format(i=i))
                     subgrid = grid[:,:,i] # or grid[:,:,i:i+1]
                     logger.debug(subgrid)
-                    #pytest.set_trace()
                     yield subgrid
             else:
                 logger.debug("generate_grid_layers: grid '{}' has 2 or less maps, so I'm just yielding the whole thing")
@@ -152,7 +148,6 @@ def _band_to_gdal_files(dap_grid, srs, filename=None):
         data = dap_grid.array.data
     elif len(shp) == 3:
         ylen, xlen, _ = shp
-        #pytest.set_trace()
         data = iter(dap_grid.array.data).next()
     else:
         raise ValueError("_band_to_gdal_files received a grid of rank {} rather than the required 2 (or 3?)".format(len(shp)))
@@ -222,7 +217,6 @@ def detect_dataset_transform(dst):
     if xmap is None or ymap is None:
         raise Exception("Dataset does not have a map for both the X and Y axes")
 
-    #pytest.set_trace()
     xarray = numpy.array([x for x in xmap.data]) # Have to iterate over HDF5Data objects to actually get the data
     xd = numpy.diff(xarray)
     pix_width = xd[0]
