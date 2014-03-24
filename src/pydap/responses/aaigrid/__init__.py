@@ -8,6 +8,7 @@ import re
 import gdal
 import osr
 import numpy
+from numpy import ma
 from webob.exc import HTTPBadRequest
 
 from pydap.responses.lib import BaseResponse
@@ -39,6 +40,12 @@ def ziperator(responders):
         f.seek(pos)
         yield f.read()
 
+numpy_to_gdal = {'float32': gdal.GDT_Float32,
+                 'float64': gdal.GDT_Float64,
+                 'int64': gdal.GDT_Int32,
+                 'int16': gdal.GDT_Int16,
+                 'int8': gdal.GDT_Byte}
+
         
 class AAIGridResponse(BaseResponse):
     def __init__(self, dataset):
@@ -46,10 +53,9 @@ class AAIGridResponse(BaseResponse):
         if not dataset:
             raise HTTPBadRequest("The ArcASCII Grid (aaigrid) response did not receive required dataset parameter")
 
-        # FIXME: In reality we will always get a _Dataset_ Type and should use pydap.lib.walk to walk through all of the Grids
+        # We will (should?) always get a _DatasetType_ and should use pydap.lib.walk to walk through all of the Grids
         self.grids = [x for x in walk(dataset, GridType)]
         if not self.grids:
-        #if type(dataset) != GridType:
             raise HTTPBadRequest("The ArcASCII Grid (aaigrid) response only supports GridTypes, yet none are included in the requested dataset: {}".format(dataset))
 
         for grid in self.grids:
@@ -71,30 +77,17 @@ class AAIGridResponse(BaseResponse):
             ('Content-type','application/zip'),
             ('Content-Disposition', 'filename="arc_ascii_grid.zip"')
         ])
-        # Optionally set the filesize header if possible
-        #self.headers.extend([('Content-length', self.nc.filesize)])
-
-    @property
-    def geo_transform(self):
-        # try:
-        #     self._geo_transform = detect_dataset_transform(dataset)
-        # except Exception, e:
-        #     raise HTTPBadRequest("The ArcASCII Grid (aaigrid) response could not detect the grid transform: {}".format(e.message))
-
-        if not hasattr(self, '_geo_transform'):
-            self._geo_transform = detect_dataset_transform(self.dataset)
-        return self._geo_transform
         
     def __iter__(self):
 
         grids = [ grid for grid in walk(self.dataset, GridType) ]
-        #logger.debug(grid[:])
 
+        # FIXME: There's may still be some problems with implicit dimension ordering
         def generate_grid_layers(grid):
             if len(grid.maps) > 2:
                 for i in range(get_time_map(grid).shape[0]):
-                    logger.debug("generate_grid_layers: yielding grid[:,:,{i}:{i}+1]".format(i=i))
-                    subgrid = grid[:,:,i] # or grid[:,:,i:i+1]
+                    logger.debug("generate_grid_layers: yielding grid[{i}:{i}+1,:,:]".format(i=i))
+                    subgrid = grid[i,:,:]
                     logger.debug(subgrid)
                     yield subgrid
             else:
@@ -103,7 +96,6 @@ class AAIGridResponse(BaseResponse):
 
         logger.debug("__iter__: creating the grid layers iterable")
         grid_layers = chain.from_iterable( [ generate_grid_layers(grid) for grid in grids ] )
-        #grid_layers = chain( [ generate_grid_layers(grid) for grid in grids ] )
 
         logger.debug("__iter__: creating the file generator")
         file_generator = _bands_to_gdal_files(grid_layers, self.srs)
@@ -129,38 +121,53 @@ def _band_to_gdal_files(dap_grid, srs, filename=None):
     logger.debug("_band_to_gdal_files: translating this grid {} of this srs {} to this file {}".format(dap_grid, srs, filename))
 
     geo_transform = detect_dataset_transform(dap_grid)
+    try:
+        missval = dap_grid.attributes['missing_value'][0]
+    except KeyError:
+        missval = None
     # FIXME: Arc Grid only supports 2 dimensions and a single band
     # ensure that this is only two dimensions
 
     # GDAL's AAIGrid driver only works in CreateCopy mode,
     # so we have to create the dataset with something else first
-    driver = gdal.GetDriverByName('NetCDF')
+    driver = gdal.GetDriverByName('MEM')
     metadata = driver.GetMetadata()
     assert metadata.has_key(gdal.DCAP_CREATE)
     assert metadata[gdal.DCAP_CREATE] == 'YES'
 
     logger.debug("Investigating the shape of this grid: {}".format(dap_grid.array))
 
-    # FIXME: This is broken... we should never get a 3d dataset... wtf?
     shp = dap_grid.array.shape
     if len(shp) == 2:
         ylen, xlen =  shp
         data = dap_grid.array.data
     elif len(shp) == 3:
-        ylen, xlen, _ = shp
+        _, ylen, xlen = shp
         data = iter(dap_grid.array.data).next()
     else:
         raise ValueError("_band_to_gdal_files received a grid of rank {} rather than the required 2 (or 3?)".format(len(shp)))
 
-    logger.debug("_band_to_gdal_files: shape checking complete... proceeding with this grid: {}".format(data))
-    
-    with NamedTemporaryFile() as f:
-        dst_ds = driver.Create(f.name, xlen, ylen, 1, gdal.GDT_Byte)
+    logger.debug("_band_to_gdal_files: shape {} checking complete... proceeding with this grid: {}".format(shp, data))
+
+    if missval:
+        data = ma.masked_equal(data, missval)
+    target_type = numpy_to_gdal[data.dtype.name]
+
+    with NamedTemporaryFile(suffix='.tif') as f:
+
+        logger.debug("Creating a GDAL driver ({}, {}) of type {}".format(xlen, ylen, target_type))
+        dst_ds = driver.Create(f.name, xlen, ylen, 1, target_type)
+
         dst_ds.SetGeoTransform( geo_transform )
         dst_ds.SetProjection( srs.ExportToWkt() )
 
-        data = dap_grid.array.data
-        dst_ds.GetRasterBand(1).WriteArray( data )
+        if missval:
+            dst_ds.GetRasterBand(1).SetNoDataValue(missval.astype('float'))
+        else:
+            # To clear the nodata value, set with an "out of range" value per GDAL docs
+            dst_ds.GetRasterBand(1).SetNoDataValue(-9999)
+        logger.debug("Data: {}".format(data))
+        dst_ds.GetRasterBand(1).WriteArray( numpy.flipud(data) )
         
         src_ds = dst_ds
        
@@ -198,10 +205,10 @@ def get_time_map(dst):
     # We'll search for those in reverse order
     for map_name, map_ in dst.maps.iteritems():
         attrs = map_.attributes
-#        if attrs.has_key('axis') and attrs['axis'] == 'T':
-#            return map_
-#        if attrs.has_key('standard_name') and attrs['standard_name'] == 'time':
-#            return map_
+        if attrs.has_key('axis') and attrs['axis'] == 'T':
+            return map_
+        if attrs.has_key('standard_name') and attrs['standard_name'] == 'time':
+            return map_
         if attrs.has_key('units') and re.match('(day|d|hour|h|hr|minute|min|second|sec|s)s? since .+', attrs['units']):
             return map_
     return None
@@ -217,12 +224,20 @@ def detect_dataset_transform(dst):
     if xmap is None or ymap is None:
         raise Exception("Dataset does not have a map for both the X and Y axes")
 
-    xarray = numpy.array([x for x in xmap.data]) # Have to iterate over HDF5Data objects to actually get the data
+    if type(xmap.data) == numpy.ndarray:
+        xarray = xmap.data
+    else:
+        xarray = iter(xmap.data).next() # Might to iterate over proxy objects to actually get the data
+
     xd = numpy.diff(xarray)
     pix_width = xd[0]
     assert numpy.isclose(pix_width, xd).all(), "No support for irregular grids"
 
-    yarray = numpy.array([y for y in ymap.data])
+    if type(ymap.data) == numpy.ndarray:
+        yarray = ymap.data
+    else:
+        yarray = iter(ymap.data).next()
+
     yd = numpy.diff(yarray)
     pix_height = yd[0]
     assert numpy.isclose(pix_height, yd).all(), "No support for irregular grids"
