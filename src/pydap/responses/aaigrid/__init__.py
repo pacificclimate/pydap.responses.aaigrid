@@ -123,12 +123,12 @@ def _band_to_gdal_files(dap_grid, srs, filename=None):
     logger.debug("_band_to_gdal_files: translating this grid {} of this srs {} to this file {}".format(dap_grid, srs, filename))
 
     geo_transform = detect_dataset_transform(dap_grid)
-    try:
-        missval = dap_grid.attributes['missing_value'][0]
-    except KeyError:
-        missval = None
-    # FIXME: Arc Grid only supports 2 dimensions and a single band
-    # ensure that this is only two dimensions
+
+    # Try to find the missing value
+    missval = None
+    for key in ('_FillValue', 'missing_value'):
+        if key in dap_grid.attributes:
+            missval = dap_grid.attributes[key][0]
 
     # GDAL's AAIGrid driver only works in CreateCopy mode,
     # so we have to create the dataset with something else first
