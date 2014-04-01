@@ -96,11 +96,22 @@ class AAIGridResponse(BaseResponse):
                 logger.debug("generate_grid_layers: grid '{}' has 2 or less maps, so I'm just yielding the whole thing")
                 yield grid
 
+        def generate_grid_filenames(grid):
+            if len(grid.maps) > 2:
+                for i in range(get_time_map(grid).shape[0]):
+                    foo = grid.name + '_' + str(i) + '.asc'
+                    logger.debug("Yielding {}".format(foo))
+                    yield foo                            
+            else:
+                logger.debug("generate_grid_layers: grid '{}' has 2 or less maps, so I'm just yielding the whole thing")
+                yield grid.name + '.asc'
+
         logger.debug("__iter__: creating the grid layers iterable")
         grid_layers = chain.from_iterable( [ generate_grid_layers(grid) for grid in grids ] )
+        grid_filenames = chain.from_iterable( [ generate_grid_filenames(grid) for grid in grids ] )
 
         logger.debug("__iter__: creating the file generator")
-        file_generator = _bands_to_gdal_files(grid_layers, self.srs)
+        file_generator = _bands_to_gdal_files(grid_layers, self.srs, grid_filenames)
 
         def named_file_iterator(filename):
             def content():
