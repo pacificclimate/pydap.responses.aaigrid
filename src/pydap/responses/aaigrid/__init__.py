@@ -64,7 +64,6 @@ class AAIGridResponse(BaseResponse):
             if l not in (2, 3):
                 raise HTTPBadRequest("The ArcASCII Grid (aaigrid) response only supports Grids with 2 or 3 dimensions, but one of the requested grids contains {} dimension{}".format(l, 's' if l > 1 else ''))
             try:
-                import pytest
                 detect_dataset_transform(grid)
             except Exception, e:
                 raise HTTPBadRequest("The ArcASCII Grid (aaigrid) response could not detect the grid transform for grid {}: {}".format(grid.name, e.message))
@@ -93,11 +92,13 @@ class AAIGridResponse(BaseResponse):
 
 
         def generate_aaigrid_files(grid):
+            logger.debug("In generate_aaigrid_files for grid {}".format(grid))
             missval = find_missval(grid)
             srs = self.srs
             geo_transform = detect_dataset_transform(grid)
 
-            if len(grid.maps) > 2:                
+            if len(grid.maps) > 2:
+                logger.debug("generate_aaigrid_files: grid '{}' has more than 2 maps".format(grid))
                 i = 0
                 iter_grid = iter(grid.array)
                 while True:
@@ -107,16 +108,17 @@ class AAIGridResponse(BaseResponse):
                     except StopIteration:
                         raise
                     for file_ in _grid_array_to_gdal_files(layer, srs, geo_transform, output_filename, missval):
+                        logger.debug("generate_aaigrid_files: yielding file {}".format(file_))
                         yield file_
                     i += 1
             else:
-                logger.debug("generate_grid_layers: grid '{}' has 2 or less maps, so I'm just yielding the whole thing")
+                logger.debug("generate_aaigrid_files: grid '{}' has 2 or less maps, so I'm just yielding the whole thing")
                 layer = grid.array
                 output_filename = grid.name + '.asc'
                 for file_ in _grid_array_to_gdal_files(layer, srs, geo_transform, output_filename, missval):
                     yield file_
 
-        logger.debug("__iter__: creating the file generator")
+        logger.debug("__iter__: creating the file generator for grids {}".format(grids))
         file_generator = chain.from_iterable(imap(generate_aaigrid_files, grids))
 
         def named_file_iterator(filename):
@@ -124,6 +126,7 @@ class AAIGridResponse(BaseResponse):
                 with open(filename, 'r') as my_file:
                     for chunk in my_file:
                         yield chunk
+                logger.debug("deleting {}".format(filename))
                 os.unlink(filename)
             return filename, content()
 

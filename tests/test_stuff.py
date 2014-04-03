@@ -78,7 +78,7 @@ def test_multi_layer_dataset(multi_layer_app, temp_file):
     z = ZipFile(temp_file.name, 'r', ZIP_DEFLATED)
     assert z
 
-    # Should be 3 files for each layer
+    # Should be 2 files for each layer
     assert len(z.namelist()) == 2 * 4
 
     # find the first asc file
@@ -98,9 +98,17 @@ NODATA_value  -9999
  3 4 5
 '''
 
-def test_real_data(real_data_test):
+def test_real_data(real_data_test, temp_file):
     req = Request.blank('/pr+tasmax+tasmin_day_BCCA+ANUSPLIN300+ACCESS1-0_historical+rcp45_r1i1p1_19500101-21001231.h5.aig?tasmax&')
     resp = req.get_response(real_data_test)
     assert resp.status == '200 OK'
     print resp.body
 
+    for chunk in resp.app_iter:
+        temp_file.write(chunk)
+    temp_file.flush()
+    
+    z = ZipFile(temp_file.name, 'r', ZIP_DEFLATED)
+    assert z
+
+    assert len(z.namelist()) == 2 # 1 layer (1 ascii file, 1 projection file)
