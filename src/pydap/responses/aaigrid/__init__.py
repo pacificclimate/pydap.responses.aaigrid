@@ -9,7 +9,6 @@ import gdal
 import osr
 import numpy
 from numpy import ma
-import pytest
 from webob.exc import HTTPBadRequest
 
 from pydap.responses.lib import BaseResponse
