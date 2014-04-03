@@ -48,6 +48,8 @@ numpy_to_gdal = {'float32': gdal.GDT_Float32,
 
         
 class AAIGridResponse(BaseResponse):
+    '''A Pydap responder which uses GDAL to convert grids into Arc/Info ASCII Grid files
+    '''
     def __init__(self, dataset):
 
         if not dataset:
@@ -82,15 +84,12 @@ class AAIGridResponse(BaseResponse):
 
         grids = walk(self.dataset, GridType)
 
-        def find_missval(grid):
-            missval = None
-            for key in ('_FillValue', 'missing_value'):
-                if key in grid.attributes:
-                    missval = grid.attributes[key][0]
-            return missval
-
-
         def generate_aaigrid_files(grid):
+            '''Generator that yields multiple file names for each layer of the grid parameter
+               This function delegates the actual creation of the '.asc' files to _grid_array_to_gdal_files()
+               Files get writted to temp space on disk (by the delegatee)
+               and then filenames are yielded from this generator
+            '''
             logger.debug("In generate_aaigrid_files for grid {}".format(grid))
             missval = find_missval(grid)
             srs = self.srs
@@ -120,7 +119,10 @@ class AAIGridResponse(BaseResponse):
         logger.debug("__iter__: creating the file generator for grids {}".format(grids))
         file_generator = chain.from_iterable(imap(generate_aaigrid_files, grids))
 
-        def named_file_iterator(filename):
+        def named_file_generator(filename):
+            '''Generator that yields pairs of (filename, file_content_generator)
+               to be consumed by the ziperator
+            '''
             def content():
                 with open(filename, 'r') as my_file:
                     for chunk in my_file:
@@ -130,13 +132,29 @@ class AAIGridResponse(BaseResponse):
             return filename, content()
 
         logger.debug("__iter__: creating the all_responders iterator")
-        all_responders = imap(named_file_iterator, file_generator)
+        all_responders = imap(named_file_generator, file_generator)
         return ziperator(all_responders)
 
 # FIXME: This is essentially side-effect based
 # It writes a file to disk and then returns the filenames
 # Should we just bake the file generator into this method?
+# If not, then we may as well just simplify it and return a file list.
+# FIXME: This claims to handle 3 dimensional grids, but it doesn't actually iterate over the 3rd dimension.
 def _grid_array_to_gdal_files(dap_grid_array, srs, geo_transform, filename=None, missval=None):
+    '''Generator which creates an Arc/Info ASCII Grid file for a sinlge "layer" (i.e. one step of X by Y)
+
+       :param dap_grid_array: Multidimensional arrary of rank 2 or 3
+       :type dap_grid_array: numpy.ndarray
+       :param srs: Spatial reference system
+       :type srs: osr.SpatialReference
+       :param geo_transform: GDAL affine transform which applies to this grid
+       :type geo_transform: list
+       :param filename: Proposed filename to which to write
+       :type filename: str
+       :param missval: Value for which data should be identified as missing
+       :type missval: numpy.array
+       :returns: A generator which yields the filenames of the created files. Note that there will likely be more than one file for layer (e.g. an .asc file and a .prj file)
+    '''
 
     logger.debug("_grid_array_to_gdal_files: translating this grid {} of this srs {} transform {} to this file {}".format(dap_grid_array, srs, geo_transform, filename))
 
@@ -198,7 +216,29 @@ def _grid_array_to_gdal_files(dap_grid_array, srs, geo_transform, filename=None,
     for filename in file_list:
         yield filename
 
+def find_missval(grid):
+    '''Search grid attributes for indications of a missing value
+
+       :param grid: An instance of the Pydap GridType
+       :type grid: GridType
+       :returns: the missing value if available (None, otherwise)
+    '''
+    missval = None
+    for key in ('_FillValue', 'missing_value'):
+        if key in grid.attributes:
+            missval = grid.attributes[key][0]
+    return missval
+
 def get_map(dst, axis):
+    '''Search grid attributes for the 'axis' attribute for a particular axis and return a mapping
+
+       :param dst: An instance of a Pydap Dataset (typically a GridType)
+       :type dst: GridType
+       :param axis: The character abbreviation for the axis for which to search. E.g. 'X', 'Y', 'Z' or 'T'.
+       :type axis: str
+       :returns: The Pydap BaseType which corresponds to the mapping for the given axis
+       :rtype: BaseType
+    '''
     for map_name, map_ in dst.maps.iteritems():
         if map_.attributes.has_key('axis'):
             if map_.attributes['axis'] == axis:
@@ -206,10 +246,19 @@ def get_map(dst, axis):
     return None
 
 def get_time_map(dst):
-    # according to http://cf-pcmdi.llnl.gov/documents/cf-conventions/1.6/cf-conventions.html#time-coordinate
-    # the time coordinate is identifiable by its units alone
-    # though optionally it can be indicated by using the standard_name and/or axis='T'
-    # We'll search for those in reverse order
+    '''Search a grid for the time axis using a variety of hueristics.
+
+       According to http://cf-pcmdi.llnl.gov/documents/cf-conventions/1.6/cf-conventions.html#time-coordinate
+       the time coordinate is identifiable by its units alone,
+       though optionally it can be indicated by using the standard_name and/or axis='T'
+
+       This function searches for those in reverse order and returns the first match.
+
+       :param dst: An instance of the Pydap Dataset (typically a GridType)
+       :type dst: GridType
+       :returns: The Pydap Basetype which corresponds to the time axis
+       :rtype: BaseType
+    '''
     for map_name, map_ in dst.maps.iteritems():
         attrs = map_.attributes
         if attrs.has_key('axis') and attrs['axis'] == 'T':
@@ -221,6 +270,13 @@ def get_time_map(dst):
     return None
 
 def detect_dataset_transform(dst):
+    '''Detects and calculates the affine transform for a given GridType dataset. See http://www.gdal.org/gdal_datamodel.html for more on the transform parameters.
+
+       :param dst: An instance of a Pydap GridType for which to caculate an affine transform
+       :type dst: GridType
+       :returns: The GDAL affine transform in the form of [ upper_left_x, pixel_width, 0, upper_left_y, 0, pixel_height ]
+       :rtype: list
+    '''
     # dst must be a Grid
     if type(dst) != GridType:
         raise Exception("Dataset must be of type Grid, not {}".format(type(dst)))
