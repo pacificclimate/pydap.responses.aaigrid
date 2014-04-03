@@ -1,7 +1,7 @@
 import os
 import logging
 from tempfile import NamedTemporaryFile, SpooledTemporaryFile
-from itertools import imap, izip, chain, izip_longest
+from itertools import imap, izip, chain, izip_longest, repeat
 from zipfile import ZipFile, ZIP_DEFLATED
 import re
 
@@ -55,7 +55,7 @@ class AAIGridResponse(BaseResponse):
             raise HTTPBadRequest("The ArcASCII Grid (aaigrid) response did not receive required dataset parameter")
 
         # We will (should?) always get a _DatasetType_ and should use pydap.lib.walk to walk through all of the Grids
-        self.grids = [x for x in walk(dataset, GridType)]
+        self.grids = walk(dataset, GridType)
         if not self.grids:
             raise HTTPBadRequest("The ArcASCII Grid (aaigrid) response only supports GridTypes, yet none are included in the requested dataset: {}".format(dataset))
 
@@ -82,36 +82,42 @@ class AAIGridResponse(BaseResponse):
         
     def __iter__(self):
 
-        grids = [ grid for grid in walk(self.dataset, GridType) ]
+        grids = walk(self.dataset, GridType)
 
-        # FIXME: There's may still be some problems with implicit dimension ordering
-        def generate_grid_layers(grid):
-            if len(grid.maps) > 2:
-                for i in range(get_time_map(grid).shape[0]):
-                    logger.debug("generate_grid_layers: yielding grid[{i}:{i}+1,:,:]".format(i=i))
-                    subgrid = grid[i,:,:]
-                    logger.debug(subgrid)
-                    yield subgrid
+        def find_missval(grid):
+            missval = None
+            for key in ('_FillValue', 'missing_value'):
+                if key in grid.attributes:
+                    missval = grid.attributes[key][0]
+            return missval
+
+
+        def generate_aaigrid_files(grid):
+            missval = find_missval(grid)
+            srs = self.srs
+            geo_transform = detect_dataset_transform(grid)
+
+            if len(grid.maps) > 2:                
+                i = 0
+                iter_grid = iter(grid.array)
+                while True:
+                    output_filename = grid.name + '_' + str(i) + '.asc'
+                    try:
+                        layer = iter_grid.next()
+                    except StopIteration:
+                        raise
+                    for file_ in _grid_array_to_gdal_files(layer, srs, geo_transform, output_filename, missval):
+                        yield file_
+                    i += 1
             else:
                 logger.debug("generate_grid_layers: grid '{}' has 2 or less maps, so I'm just yielding the whole thing")
-                yield grid
-
-        def generate_grid_filenames(grid):
-            if len(grid.maps) > 2:
-                for i in range(get_time_map(grid).shape[0]):
-                    foo = grid.name + '_' + str(i) + '.asc'
-                    logger.debug("Yielding {}".format(foo))
-                    yield foo                            
-            else:
-                logger.debug("generate_grid_layers: grid '{}' has 2 or less maps, so I'm just yielding the whole thing")
-                yield grid.name + '.asc'
-
-        logger.debug("__iter__: creating the grid layers iterable")
-        grid_layers = chain.from_iterable( [ generate_grid_layers(grid) for grid in grids ] )
-        grid_filenames = chain.from_iterable( [ generate_grid_filenames(grid) for grid in grids ] )
+                layer = grid.array
+                output_filename = grid.name + '.asc'
+                for file_ in _grid_array_to_gdal_files(layer, srs, geo_transform, output_filename, missval):
+                    yield file_
 
         logger.debug("__iter__: creating the file generator")
-        file_generator = _bands_to_gdal_files(grid_layers, self.srs, grid_filenames)
+        file_generator = chain.from_iterable(imap(generate_aaigrid_files, grids))
 
         def named_file_iterator(filename):
             def content():
@@ -125,21 +131,12 @@ class AAIGridResponse(BaseResponse):
         all_responders = imap(named_file_iterator, file_generator)
         return ziperator(all_responders)
 
-
 # FIXME: This is essentially side-effect based
 # It writes a file to disk and then returns the filenames
 # Should we just bake the file generator into this method?
-def _band_to_gdal_files(dap_grid, srs, filename=None):
+def _grid_array_to_gdal_files(dap_grid_array, srs, geo_transform, filename=None, missval=None):
 
-    logger.debug("_band_to_gdal_files: translating this grid {} of this srs {} to this file {}".format(dap_grid, srs, filename))
-
-    geo_transform = detect_dataset_transform(dap_grid)
-
-    # Try to find the missing value
-    missval = None
-    for key in ('_FillValue', 'missing_value'):
-        if key in dap_grid.attributes:
-            missval = dap_grid.attributes[key][0]
+    logger.debug("_grid_array_to_gdal_files: translating this grid {} of this srs {} transform {} to this file {}".format(dap_grid_array, srs, geo_transform, filename))
 
     # GDAL's AAIGrid driver only works in CreateCopy mode,
     # so we have to create the dataset with something else first
@@ -148,19 +145,19 @@ def _band_to_gdal_files(dap_grid, srs, filename=None):
     assert metadata.has_key(gdal.DCAP_CREATE)
     assert metadata[gdal.DCAP_CREATE] == 'YES'
 
-    logger.debug("Investigating the shape of this grid: {}".format(dap_grid.array))
+    logger.debug("Investigating the shape of this grid: {}".format(dap_grid_array))
 
-    shp = dap_grid.array.shape
+    shp = dap_grid_array.shape
     if len(shp) == 2:
         ylen, xlen =  shp
-        data = dap_grid.array.data
+        data = dap_grid_array
     elif len(shp) == 3:
         _, ylen, xlen = shp
-        data = iter(dap_grid.array.data).next()
+        data = iter(dap_grid_array.data).next()
     else:
-        raise ValueError("_band_to_gdal_files received a grid of rank {} rather than the required 2 (or 3?)".format(len(shp)))
+        raise ValueError("_grid_array_to_gdal_files received a grid of rank {} rather than the required 2 (or 3?)".format(len(shp)))
 
-    logger.debug("_band_to_gdal_files: shape {} checking complete... proceeding with this grid: {}".format(shp, data))
+    logger.debug("_grid_array_to_gdal_files: shape {} checking complete... proceeding with this grid: {}".format(shp, data))
 
     if missval:
         data = ma.masked_equal(data, missval)
@@ -198,11 +195,6 @@ def _band_to_gdal_files(dap_grid, srs, filename=None):
 
     for filename in file_list:
         yield filename
-
-def _bands_to_gdal_files(dap_grid_iterable, srs, filename_iterable=[]):
-    for dap_grid, filename in izip_longest(dap_grid_iterable, filename_iterable):
-        for filename_to_yield in _band_to_gdal_files(dap_grid, srs, filename):
-            yield filename_to_yield
 
 def get_map(dst, axis):
     for map_name, map_ in dst.maps.iteritems():
