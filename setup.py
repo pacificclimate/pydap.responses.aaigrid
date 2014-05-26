@@ -7,7 +7,7 @@ install_requires = [
     # This isn't exactly a hard requirement (if you're not going to serve hdf5 base data), but you can't serve hdf5 data with a version _less_ than this
     # ... should probably become an "extras"
     'pydap.handlers.hdf5 >= 0.4',
-    'pydap >=3.2.1',
+    'pydap_pdp >=3.2.1',
     'gdal'
 ]
 
@@ -17,8 +17,6 @@ setup(name = 'pydap.responses.aaigrid',
     keywords = 'arcinfo pydap opendap dods',
     author = 'James Hiebert',
     author_email = 'hiebert@uvic.ca',
-    dependency_links = ['https://github.com/pacificclimate/pydap-pdp/tarball/master#egg=Pydap-3.2.2',
-                        'https://github.com/pacificclimate/pydap.handlers.hdf5/tarball/master#egg=pydap.handlers.hdf5-0.5'],
     packages = find_packages('src'),
     package_dir = {'': 'src'},
     namespace_packages = ['pydap', 'pydap.responses'],
