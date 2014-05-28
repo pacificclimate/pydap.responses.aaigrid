@@ -1,2 +1,4 @@
 pytest
+# h5.Dataset.dims attribute was introduced in this branch
+h5py >= 2.1
 pydap.handlers.hdf5
