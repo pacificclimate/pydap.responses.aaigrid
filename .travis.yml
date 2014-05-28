@@ -1,3 +1,9 @@
 language: python
-python: 2.7
-script: tox
+python: 2.7_with_system_site_packages
+before_install:
+    - sudo apt-get install -qq python-numpy python-gdal python-h5py
+install:
+    - pip install -r requirements.txt -r test_requirements.txt -i http://tools.pacificclimate.org/pypiserver/
+    - pip install -i http://tools.pacificclimate.org/pypiserver/ .
+script:
+    - py.test
