@@ -95,26 +95,10 @@ class AAIGridResponse(BaseResponse):
             srs = self.srs
             geo_transform = detect_dataset_transform(grid)
 
-            if len(grid.maps) > 2:
-                logger.debug("generate_aaigrid_files: grid '{}' has more than 2 maps".format(grid))
-                i = 0
-                iter_grid = iter(grid.array)
-                while True:
-                    output_filename = grid.name + '_' + str(i) + '.asc'
-                    try:
-                        layer = iter_grid.next()
-                    except StopIteration:
-                        raise
-                    for file_ in _grid_array_to_gdal_files(layer, srs, geo_transform, output_filename, missval):
-                        logger.debug("generate_aaigrid_files: yielding file {}".format(file_))
-                        yield file_
-                    i += 1
-            else:
-                logger.debug("generate_aaigrid_files: grid '{}' has 2 or less maps, so I'm just yielding the whole thing")
-                layer = grid.array
-                output_filename = grid.name + '.asc'
-                for file_ in _grid_array_to_gdal_files(layer, srs, geo_transform, output_filename, missval):
-                    yield file_
+            # FIXME: can me make an filename_fmt param for _grid_array_to_gdal_files?
+            # output_filename = grid.name + '.asc'
+            for file_ in _grid_array_to_gdal_files(grid.array, srs, geo_transform, missval=missval):
+                yield file_
 
         logger.debug("__iter__: creating the file generator for grids {}".format(grids))
         file_generator = chain.from_iterable(imap(generate_aaigrid_files, grids))
@@ -139,7 +123,6 @@ class AAIGridResponse(BaseResponse):
 # It writes a file to disk and then returns the filenames
 # Should we just bake the file generator into this method?
 # If not, then we may as well just simplify it and return a file list.
-# FIXME: This claims to handle 3 dimensional grids, but it doesn't actually iterate over the 3rd dimension.
 def _grid_array_to_gdal_files(dap_grid_array, srs, geo_transform, filename=None, missval=None):
     '''Generator which creates an Arc/Info ASCII Grid file for a sinlge "layer" (i.e. one step of X by Y)
 
@@ -170,50 +153,52 @@ def _grid_array_to_gdal_files(dap_grid_array, srs, geo_transform, filename=None,
     shp = dap_grid_array.shape
     if len(shp) == 2:
         ylen, xlen =  shp
-        data = dap_grid_array
+        data = [ dap_grid_array ]
     elif len(shp) == 3:
         _, ylen, xlen = shp
-        data = iter(dap_grid_array.data).next()
+        data = iter(dap_grid_array.data)
     else:
-        raise ValueError("_grid_array_to_gdal_files received a grid of rank {} rather than the required 2 (or 3?)".format(len(shp)))
+        raise ValueError("_grid_array_to_gdal_files received a grid of rank {} rather than the required 2 or 3".format(len(shp)))
 
-    logger.debug("_grid_array_to_gdal_files: shape {} checking complete... proceeding with this grid: {}".format(shp, data))
-
-    if missval:
-        data = ma.masked_equal(data, missval)
-    target_type = numpy_to_gdal[data.dtype.name]
+    target_type = numpy_to_gdal[dap_grid_array.dtype.name]
 
     logger.debug("Creating a GDAL driver ({}, {}) of type {}".format(xlen, ylen, target_type))
     # Because we're using the MEM driver, we can use an empty filename and it will never go to disk
-    dst_ds = driver.Create('', xlen, ylen, 1, target_type)
+    meta_ds = driver.Create('', xlen, ylen, 1, target_type)
 
-    dst_ds.SetGeoTransform( geo_transform )
-    dst_ds.SetProjection( srs.ExportToWkt() )
+    meta_ds.SetGeoTransform( geo_transform )
+    meta_ds.SetProjection( srs.ExportToWkt() )
 
     if missval:
-        dst_ds.GetRasterBand(1).SetNoDataValue(missval.astype('float'))
+        meta_ds.GetRasterBand(1).SetNoDataValue(missval.astype('float'))
     else:
         # To clear the nodata value, set with an "out of range" value per GDAL docs
-        dst_ds.GetRasterBand(1).SetNoDataValue(-9999)
-    logger.debug("Data: {}".format(data))
-    dst_ds.GetRasterBand(1).WriteArray( numpy.flipud(data) )
+        meta_ds.GetRasterBand(1).SetNoDataValue(-9999)
+
+    for layer in data:
+
+        if missval:
+            layer = ma.masked_equal(layer, missval)
+
+        logger.debug("Data: {}".format(layer))
+        meta_ds.GetRasterBand(1).WriteArray( numpy.flipud(layer) )
         
-    src_ds = dst_ds
-       
-    driver = gdal.GetDriverByName('AAIGrid')
+        driver = gdal.GetDriverByName('AAIGrid')
 
-    if not filename:
-        filename = NamedTemporaryFile(suffix='.asc', delete=False).name
-    dst_ds = driver.CreateCopy(filename, src_ds, 0)
+        if not filename:
+            filename = NamedTemporaryFile(suffix='.asc', delete=False).name
+        dst_ds = driver.CreateCopy(filename, meta_ds, 0)
         
-    # Once we're done, close properly the dataset
-    file_list = dst_ds.GetFileList()
+        # Once we're done, close properly the dataset
+        file_list = dst_ds.GetFileList()
 
-    dst_ds = None
-    src_ds = None
+        dst_ds = None
 
-    for filename in file_list:
-        yield filename
+        for filename in file_list:
+            yield filename
+        filename = None
+
+    meta_ds = None
 
 def find_missval(grid):
     '''Search grid attributes for indications of a missing value
