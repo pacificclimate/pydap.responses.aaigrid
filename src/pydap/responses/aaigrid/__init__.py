@@ -183,29 +183,28 @@ def _grid_array_to_gdal_files(dap_grid_array, srs, geo_transform, filename=None,
         data = ma.masked_equal(data, missval)
     target_type = numpy_to_gdal[data.dtype.name]
 
-    with NamedTemporaryFile(suffix='.tif') as f:
+    logger.debug("Creating a GDAL driver ({}, {}) of type {}".format(xlen, ylen, target_type))
+    # Because we're using the MEM driver, we can use an empty filename and it will never go to disk
+    dst_ds = driver.Create('', xlen, ylen, 1, target_type)
 
-        logger.debug("Creating a GDAL driver ({}, {}) of type {}".format(xlen, ylen, target_type))
-        dst_ds = driver.Create(f.name, xlen, ylen, 1, target_type)
+    dst_ds.SetGeoTransform( geo_transform )
+    dst_ds.SetProjection( srs.ExportToWkt() )
 
-        dst_ds.SetGeoTransform( geo_transform )
-        dst_ds.SetProjection( srs.ExportToWkt() )
-
-        if missval:
-            dst_ds.GetRasterBand(1).SetNoDataValue(missval.astype('float'))
-        else:
-            # To clear the nodata value, set with an "out of range" value per GDAL docs
-            dst_ds.GetRasterBand(1).SetNoDataValue(-9999)
-        logger.debug("Data: {}".format(data))
-        dst_ds.GetRasterBand(1).WriteArray( numpy.flipud(data) )
+    if missval:
+        dst_ds.GetRasterBand(1).SetNoDataValue(missval.astype('float'))
+    else:
+        # To clear the nodata value, set with an "out of range" value per GDAL docs
+        dst_ds.GetRasterBand(1).SetNoDataValue(-9999)
+    logger.debug("Data: {}".format(data))
+    dst_ds.GetRasterBand(1).WriteArray( numpy.flipud(data) )
         
-        src_ds = dst_ds
+    src_ds = dst_ds
        
-        driver = gdal.GetDriverByName('AAIGrid')
+    driver = gdal.GetDriverByName('AAIGrid')
 
-        if not filename:
-            filename = NamedTemporaryFile(suffix='.asc', delete=False).name
-        dst_ds = driver.CreateCopy(filename, src_ds, 0)
+    if not filename:
+        filename = NamedTemporaryFile(suffix='.asc', delete=False).name
+    dst_ds = driver.CreateCopy(filename, src_ds, 0)
         
     # Once we're done, close properly the dataset
     file_list = dst_ds.GetFileList()
