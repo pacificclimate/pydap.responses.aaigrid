@@ -100,31 +100,28 @@ class AAIGridResponse(BaseResponse):
             for file_ in _grid_array_to_gdal_files(grid.array, srs, geo_transform, filename_fmt=output_fmt, missval=missval):
                 yield file_
 
+        # Send each of the grids through _grid_array_to_gdal_files
+        # which will generate multiple files per grid
         logger.debug("__iter__: creating the file generator for grids {}".format(grids))
         file_generator = chain.from_iterable(imap(generate_aaigrid_files, grids))
 
-        def named_file_generator(filename):
-            '''Generator that yields pairs of (filename, file_content_generator)
-               to be consumed by the ziperator
-            '''
-            def content():
-                with open(filename, 'r') as my_file:
-                    for chunk in my_file:
-                        yield chunk
-                logger.debug("deleting {}".format(filename))
-                os.unlink(filename)
-            return basename(filename), content()
+        return ziperator(file_generator)
 
-        logger.debug("__iter__: creating the all_responders iterator")
-        all_responders = imap(named_file_generator, file_generator)
-        return ziperator(all_responders)
 
-# FIXME: This is essentially side-effect based
-# It writes a file to disk and then returns the filenames
-# Should we just bake the file generator into this method?
-# If not, then we may as well just simplify it and return a file list.
+def named_file_generator(filename):
+    '''Generator that yields pairs of (filename, file_content_generator)
+       to be consumed by the ziperator
+    '''
+    def content():
+        with open(filename, 'r') as my_file:
+            for chunk in my_file:
+                yield chunk
+        logger.debug("deleting {}".format(filename))
+        os.unlink(filename)
+    return basename(filename), content()
+
 def _grid_array_to_gdal_files(dap_grid_array, srs, geo_transform, filename_fmt='{i}.asc', missval=None):
-    '''Generator which creates an Arc/Info ASCII Grid file for a sinlge "layer" (i.e. one step of X by Y)
+    '''Generator which creates an Arc/Info ASCII Grid file for each "layer" (i.e. one step of X by Y) in a given grid
 
        :param dap_grid_array: Multidimensional arrary of rank 2 or 3
        :type dap_grid_array: numpy.ndarray
@@ -136,20 +133,12 @@ def _grid_array_to_gdal_files(dap_grid_array, srs, geo_transform, filename_fmt='
        :type filename_fmt: str
        :param missval: Value for which data should be identified as missing
        :type missval: numpy.array
-       :returns: A generator which yields the filenames of the created files. Note that there will likely be more than one file for layer (e.g. an .asc file and a .prj file)
+       :returns: A generator which yields pairs of (filename, file_content_generator) of the created files. Note that there will likely be more than one file for layer (e.g. an .asc file and a .prj file).
     '''
 
     logger.debug("_grid_array_to_gdal_files: translating this grid {} of this srs {} transform {} to this file {}".format(dap_grid_array, srs, geo_transform, filename_fmt))
 
-    # GDAL's AAIGrid driver only works in CreateCopy mode,
-    # so we have to create the dataset with something else first
-    driver = gdal.GetDriverByName('MEM')
-    metadata = driver.GetMetadata()
-    assert metadata.has_key(gdal.DCAP_CREATE)
-    assert metadata[gdal.DCAP_CREATE] == 'YES'
-
     logger.debug("Investigating the shape of this grid: {}".format(dap_grid_array))
-
     shp = dap_grid_array.shape
     if len(shp) == 2:
         ylen, xlen =  shp
@@ -162,18 +151,7 @@ def _grid_array_to_gdal_files(dap_grid_array, srs, geo_transform, filename_fmt='
 
     target_type = numpy_to_gdal[dap_grid_array.dtype.name]
 
-    logger.debug("Creating a GDAL driver ({}, {}) of type {}".format(xlen, ylen, target_type))
-    # Because we're using the MEM driver, we can use an empty filename and it will never go to disk
-    meta_ds = driver.Create('', xlen, ylen, 1, target_type)
-
-    meta_ds.SetGeoTransform( geo_transform )
-    meta_ds.SetProjection( srs.ExportToWkt() )
-
-    if missval:
-        meta_ds.GetRasterBand(1).SetNoDataValue(missval.astype('float'))
-    else:
-        # To clear the nodata value, set with an "out of range" value per GDAL docs
-        meta_ds.GetRasterBand(1).SetNoDataValue(-9999)
+    meta_ds = create_gdal_mem_dataset(xlen, ylen, geo_transform, srs, target_type, missval)
 
     for i, layer in enumerate(data):
 
@@ -194,9 +172,52 @@ def _grid_array_to_gdal_files(dap_grid_array, srs, geo_transform, filename_fmt='
         dst_ds = None
 
         for filename in file_list:
-            yield filename
+            yield named_file_generator(filename)
 
     meta_ds = None
+
+def create_gdal_mem_dataset(xlen, ylen, geo_transform, srs, target_type, missval=None):
+    '''Create and return a single layer GDAL dataset in RAM.
+       This dataset can have values repeatedly set to it with dst.GetRasterBand(1).WriteArray()
+       and then can be written out to any GDAL format by creating a driver and then using
+       `driver.CreateCopy([filename], dst)`
+
+       :param xlen: Number of grid cells in the X (longitude) dimension
+       :type xlen: int
+       :param ylen: Number of grid cells in the Y (latitude) dimension
+       :type ylen: int
+       :param srs: Spatial reference system
+       :type srs: osr.SpatialReference
+       :param geo_transform: GDAL affine transform which applies to this grid
+       :type geo_transform: list
+       :param target_type: A known `gdal data type <http://gdal.org/gdal_8h.html#a22e22ce0a55036a96f652765793fb7a4>`_
+       :type target_type: gdal.GDALDataType
+       :param missval: Value for which data should be identified as missing
+       :type missval: numpy.array
+       :returns: A single layer gdal.Dataset driven by the MEM driver
+    '''
+    logger.debug("Creating a GDAL driver ({}, {}) of type {}".format(xlen, ylen, target_type))
+    # Because we're using the MEM driver, we can use an empty filename and it will never go to disk
+
+    # GDAL's AAIGrid driver only works in CreateCopy mode,
+    # so we have to create the dataset with something else first
+    driver = gdal.GetDriverByName('MEM')
+    metadata = driver.GetMetadata()
+    assert metadata.has_key(gdal.DCAP_CREATE)
+    assert metadata[gdal.DCAP_CREATE] == 'YES'
+
+    dst = driver.Create('', xlen, ylen, 1, target_type)
+
+    dst.SetGeoTransform( geo_transform )
+    dst.SetProjection( srs.ExportToWkt() )
+
+    if missval:
+        dst.GetRasterBand(1).SetNoDataValue(missval.astype('float'))
+    else:
+        # To clear the nodata value, set with an "out of range" value per GDAL docs
+        dst.GetRasterBand(1).SetNoDataValue(-9999)
+
+    return dst
 
 def find_missval(grid):
     '''Search grid attributes for indications of a missing value
