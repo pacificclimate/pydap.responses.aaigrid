@@ -3,9 +3,12 @@ from tempfile import NamedTemporaryFile
 
 from webob.request import Request
 from webob.exc import HTTPBadRequest
+import numpy as np
+import numpy.testing
 import pytest
 
-from pydap.responses.aaigrid import AAIGridResponse
+from pydap.model import GridType, BaseType, DatasetType
+from pydap.responses.aaigrid import AAIGridResponse, find_missval, detect_dataset_transform, get_map
 
 def test_bad_dataset_failure():
     with pytest.raises(HTTPBadRequest) as excinfo:
@@ -114,3 +117,37 @@ def test_real_data(real_data_test, temp_file):
     assert z
 
     assert len(z.namelist()) == 2 # 1 layer (1 ascii file, 1 projection file)
+
+def test_find_missval():
+    grid = GridType('my_grid')
+
+    assert find_missval(grid) == None
+
+    grid.attributes['missing_value'] = np.array([9999])
+    assert find_missval(grid) == 9999
+
+    # _FillValue should take precendence over missing_value
+    grid.attributes['_FillValue'] = np.array([0])
+    assert find_missval(grid) == 0
+
+
+def test_detect_dataset_transform(single_layer_dataset):
+
+    with pytest.raises(Exception) as excinfo:
+        detect_dataset_transform(single_layer_dataset)
+    assert excinfo.value.message.startswith('Dataset must be of type Grid')
+
+    assert detect_dataset_transform(single_layer_dataset['my_grid']) == [-122.5, -0.5, 0, 51.0, 0, 1.0]
+
+def test_get_map(single_dimension_dataset):
+    dst = DatasetType('my_dataset')
+
+    with pytest.raises(Exception) as excinfo:
+        get_map(dst, 'X')
+
+    dst = GridType('my_grid')
+    assert get_map(dst, 'X') == None
+
+    grid = single_dimension_dataset['my_grid']
+    numpy.testing.assert_array_equal(get_map(grid, 'X'), grid['x'])
+    assert get_map(grid, 'does_not_exist') == None

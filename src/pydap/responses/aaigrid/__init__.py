@@ -227,7 +227,7 @@ def find_missval(grid):
        :returns: the missing value if available (None, otherwise)
     '''
     missval = None
-    for key in ('_FillValue', 'missing_value'):
+    for key in ('missing_value', '_FillValue'):
         if key in grid.attributes:
             missval = grid.attributes[key][0]
     return missval
