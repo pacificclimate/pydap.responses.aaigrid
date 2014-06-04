@@ -80,6 +80,8 @@ def test_multi_layer_dataset(multi_layer_app, temp_file):
 
     # Should be 2 files for each layer
     assert len(z.namelist()) == 2 * 4
+    assert 'my_grid_0.asc' in z.namelist()
+
 
     # find the first asc file
     asc_filename = filter(lambda x: x.endswith('.asc'), z.namelist())[0]

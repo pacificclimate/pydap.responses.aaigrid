@@ -1,6 +1,7 @@
 import os
+from os.path import basename, sep
 import logging
-from tempfile import NamedTemporaryFile, SpooledTemporaryFile
+from tempfile import gettempdir, SpooledTemporaryFile
 from itertools import imap, izip, chain, izip_longest, repeat
 from zipfile import ZipFile, ZIP_DEFLATED
 import re
@@ -95,9 +96,8 @@ class AAIGridResponse(BaseResponse):
             srs = self.srs
             geo_transform = detect_dataset_transform(grid)
 
-            # FIXME: can me make an filename_fmt param for _grid_array_to_gdal_files?
-            # output_filename = grid.name + '.asc'
-            for file_ in _grid_array_to_gdal_files(grid.array, srs, geo_transform, missval=missval):
+            output_fmt = grid.name + '_{i}.asc'
+            for file_ in _grid_array_to_gdal_files(grid.array, srs, geo_transform, filename_fmt=output_fmt, missval=missval):
                 yield file_
 
         logger.debug("__iter__: creating the file generator for grids {}".format(grids))
@@ -113,7 +113,7 @@ class AAIGridResponse(BaseResponse):
                         yield chunk
                 logger.debug("deleting {}".format(filename))
                 os.unlink(filename)
-            return filename, content()
+            return basename(filename), content()
 
         logger.debug("__iter__: creating the all_responders iterator")
         all_responders = imap(named_file_generator, file_generator)
@@ -123,7 +123,7 @@ class AAIGridResponse(BaseResponse):
 # It writes a file to disk and then returns the filenames
 # Should we just bake the file generator into this method?
 # If not, then we may as well just simplify it and return a file list.
-def _grid_array_to_gdal_files(dap_grid_array, srs, geo_transform, filename=None, missval=None):
+def _grid_array_to_gdal_files(dap_grid_array, srs, geo_transform, filename_fmt='{i}.asc', missval=None):
     '''Generator which creates an Arc/Info ASCII Grid file for a sinlge "layer" (i.e. one step of X by Y)
 
        :param dap_grid_array: Multidimensional arrary of rank 2 or 3
@@ -132,14 +132,14 @@ def _grid_array_to_gdal_files(dap_grid_array, srs, geo_transform, filename=None,
        :type srs: osr.SpatialReference
        :param geo_transform: GDAL affine transform which applies to this grid
        :type geo_transform: list
-       :param filename: Proposed filename to which to write
-       :type filename: str
+       :param filename_fmt: Proposed filename template for output files. "{i}" can be included and will be filled in with the layer number.
+       :type filename_fmt: str
        :param missval: Value for which data should be identified as missing
        :type missval: numpy.array
        :returns: A generator which yields the filenames of the created files. Note that there will likely be more than one file for layer (e.g. an .asc file and a .prj file)
     '''
 
-    logger.debug("_grid_array_to_gdal_files: translating this grid {} of this srs {} transform {} to this file {}".format(dap_grid_array, srs, geo_transform, filename))
+    logger.debug("_grid_array_to_gdal_files: translating this grid {} of this srs {} transform {} to this file {}".format(dap_grid_array, srs, geo_transform, filename_fmt))
 
     # GDAL's AAIGrid driver only works in CreateCopy mode,
     # so we have to create the dataset with something else first
@@ -175,7 +175,7 @@ def _grid_array_to_gdal_files(dap_grid_array, srs, geo_transform, filename=None,
         # To clear the nodata value, set with an "out of range" value per GDAL docs
         meta_ds.GetRasterBand(1).SetNoDataValue(-9999)
 
-    for layer in data:
+    for i, layer in enumerate(data):
 
         if missval:
             layer = ma.masked_equal(layer, missval)
@@ -185,18 +185,16 @@ def _grid_array_to_gdal_files(dap_grid_array, srs, geo_transform, filename=None,
         
         driver = gdal.GetDriverByName('AAIGrid')
 
-        if not filename:
-            filename = NamedTemporaryFile(suffix='.asc', delete=False).name
-        dst_ds = driver.CreateCopy(filename, meta_ds, 0)
+        outfile = gettempdir() + sep + filename_fmt.format(i=i)
+        dst_ds = driver.CreateCopy(outfile, meta_ds, 0)
         
-        # Once we're done, close properly the dataset
         file_list = dst_ds.GetFileList()
 
+        # Once we're done, close properly the dataset
         dst_ds = None
 
         for filename in file_list:
             yield filename
-        filename = None
 
     meta_ds = None
 
