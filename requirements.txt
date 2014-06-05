@@ -1,3 +1,3 @@
 numpy
-gdal
+gdal <=1.9 #v1.10 errors on compile and v1.11 requires libgdal-1.11 which isn't really available yet.
 pydap_pdp >=3.2.1

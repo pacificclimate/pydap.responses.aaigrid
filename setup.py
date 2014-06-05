@@ -8,7 +8,7 @@ install_requires = [
     # ... should probably become an "extras"
     'pydap.handlers.hdf5 >= 0.4',
     'pydap_pdp >=3.2.1',
-    'gdal'
+    'gdal <=1.9'
 ]
 
 setup(name = 'pydap.responses.aaigrid',
