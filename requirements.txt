@@ -1,3 +1,4 @@
 numpy
-gdal <=1.9 #v1.10 errors on compile and v1.11 requires libgdal-1.11 which isn't really available yet.
+# GDal version must match installed libgdal1 version. Set manually or with tox_prep.sh
+gdal
 pydap_pdp >=3.2.1
