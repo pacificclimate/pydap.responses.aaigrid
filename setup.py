@@ -1,15 +1,23 @@
 from setuptools import setup, find_packages
+from subprocess import check_output
 import sys, os
 
 version = '0.2'
 
-install_requires = [
-    # This isn't exactly a hard requirement (if you're not going to serve hdf5 base data), but you can't serve hdf5 data with a version _less_ than this
-    # ... should probably become an "extras"
-    'pydap.handlers.hdf5 >= 0.4',
-    'pydap_pdp >=3.2.1',
-    'gdal <=1.9'
-]
+def get_install_requires():
+    install_requires = [
+        # This isn't exactly a hard requirement (if you're not going to serve hdf5 base data), but you can't serve hdf5 data with a version _less_ than this
+        # ... should probably become an "extras"
+        'pydap.handlers.hdf5 >= 0.4',
+        'pydap_pdp >=3.2.1'
+        ]
+    try:
+        v = check_output(['gdal-config', '--version']).strip()
+        gdal_requirement = 'gdal =={}'.format(v)
+    except:
+        gdal_requirement = 'gdal'
+    install_requires.append(gdal_requirement)
+    return install_requires
 
 setup(name = 'pydap.responses.aaigrid',
     version = version,
@@ -23,7 +31,7 @@ setup(name = 'pydap.responses.aaigrid',
     package_data = {'pydap.responses.aaigrid': ['data/*.h5']},
     include_package_data = True,
     zip_safe = True,
-    install_requires = install_requires,
+    install_requires = get_install_requires(),
     tests_require = ['pytest', 'numpy', 'pydap.handlers.hdf5'],
     entry_points = """
         [pydap.response]
