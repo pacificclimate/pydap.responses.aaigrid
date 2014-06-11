@@ -13,6 +13,7 @@ def get_install_requires():
         ]
     try:
         v = check_output(['gdal-config', '--version']).strip()
+        v = v.rsplit('.', 1)[0] #Strip bugfix version
         gdal_requirement = 'gdal =={}'.format(v)
     except:
         gdal_requirement = 'gdal'
