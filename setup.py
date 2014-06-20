@@ -2,7 +2,7 @@ from setuptools import setup, find_packages
 from subprocess import check_output
 import sys, os
 
-version = '0.3'
+version = '0.4'
 
 def get_install_requires():
     install_requires = [
