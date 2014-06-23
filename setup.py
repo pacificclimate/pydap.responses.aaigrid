@@ -2,14 +2,14 @@ from setuptools import setup, find_packages
 from subprocess import check_output
 import sys, os
 
-version = '0.4'
+version = '0.5'
 
 def get_install_requires():
     install_requires = [
         # This isn't exactly a hard requirement (if you're not going to serve hdf5 base data), but you can't serve hdf5 data with a version _less_ than this
         # ... should probably become an "extras"
         'pydap.handlers.hdf5 >= 0.4',
-        'pydap_pdp >=3.2.1'
+        'pydap_pdp >=3.2.3'
         ]
     try:
         v = check_output(['gdal-config', '--version']).strip()

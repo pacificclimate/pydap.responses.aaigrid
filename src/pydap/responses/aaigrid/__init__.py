@@ -18,7 +18,7 @@ from pydap.lib import walk, get_var
 
 import logging
 logging.basicConfig(level=logging.DEBUG)
-logger = logging.getLogger()
+logger = logging.getLogger('pydap.responses.aaigrid')
 
 # FIXME: this code should be factored out... it's used in two places!
 def ziperator(responders):
@@ -76,10 +76,13 @@ class AAIGridResponse(BaseResponse):
 
         BaseResponse.__init__(self, dataset)
 
-        self.headers.extend([
+        # We're about to (re-)set the Content-disposition header... make sure that it is not included before-hand
+        new_headers = [ (name, value) for name, value in self.headers if name != 'Content-disposition' ]
+        new_headers.extend([
             ('Content-type','application/zip'),
-            ('Content-Disposition', 'filename="arc_ascii_grid.zip"')
+            ('Content-disposition', 'attachment; filename="arc_ascii_grid.zip"')
         ])
+        self.headers = new_headers
         
     def __iter__(self):
 

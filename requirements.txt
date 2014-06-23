@@ -1,4 +1,4 @@
 numpy
 # GDal version must match installed libgdal1 version. Set manually or with tox_prep.sh
 gdal
-pydap_pdp >=3.2.1
+pydap_pdp >=3.2.3

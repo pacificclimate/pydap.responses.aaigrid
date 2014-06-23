@@ -1,5 +1,7 @@
 from zipfile import ZipFile, ZIP_DEFLATED
 from tempfile import NamedTemporaryFile
+from pydap.handlers.hdf5 import HDF5Handler
+
 
 from webob.request import Request
 from webob.exc import HTTPBadRequest
@@ -151,3 +153,9 @@ def test_get_map(single_dimension_dataset):
     grid = single_dimension_dataset['my_grid']
     numpy.testing.assert_array_equal(get_map(grid, 'X'), grid['x'])
     assert get_map(grid, 'does_not_exist') == None
+
+def test_no_duplicate_headers(real_data_test):
+    req = Request.blank('/pr+tasmax+tasmin_day_BCCA+ANUSPLIN300+ACCESS1-0_historical+rcp45_r1i1p1_19500101-21001231.h5.aig?tasmax&')
+    resp = req.get_response(real_data_test)
+    assert resp.status == '200 OK'
+    assert len(resp.headers.keys()) == len(set(resp.headers.keys()))
