@@ -4,9 +4,6 @@ import sys, os
 version = '0.5'
 
 install_requires = [
-    # This isn't exactly a hard requirement (if you're not going to serve hdf5 base data), but you can't serve hdf5 data with a version _less_ than this
-    # ... should probably become an "extras"
-    'pydap.handlers.hdf5 >= 0.4',
     'pydap_pdp >=3.2.3',
     'gdal'
 ]
