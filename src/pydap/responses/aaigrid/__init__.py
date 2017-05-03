@@ -29,7 +29,7 @@ def ziperator(responders):
     '''
     with SpooledTemporaryFile(1024*1024*1024) as f:
         yield 'PK' # Response headers aren't sent until the first chunk of data is sent.  Let's get this repsonse moving!
-        z = ZipFile(f, 'w', ZIP_DEFLATED)
+        z = ZipFile(f, 'w', ZIP_DEFLATED, True)
 
         for name, responder in responders:
             pos = 2 if f.tell() == 0 else f.tell()
