@@ -1,6 +1,6 @@
 from setuptools import setup, find_packages
 
-version = '0.6'
+version = '0.7'
 
 install_requires = [
     'pydap_pdp >=3.2.3',
